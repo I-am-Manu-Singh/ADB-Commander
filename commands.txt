@@ -1,0 +1,13 @@
+#running
+python3 main.py    
+
+#create .app
+pyinstaller --noconfirm --windowed --name "ADB Commander" --icon=app_icon.icns main.py  
+
+#package .dmg
+hdiutil create -volname "ADB Commander" -srcfolder dist/ -ov -format UDZO ADB_Commander.dmg
+
+#sign dmg
+cert=' Developer ID Application: Manpreet Singh (S9QG85F99B)'
+hdiutil verify -certificate-tree ADB_Commander.dmg
+signing_identity="$cert" codesign --options runtime --timestamp -s "$signing_identity" ADB_Commander.dmg    

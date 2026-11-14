@@ -74,8 +74,9 @@ class VectorIconFactory:
         return photo
 
     def _draw_pil_icon(self, name, size, color):
+        # Draw on a fixed 64x64 high-res canvas, then smoothly resize to any requested size
         scale = 4
-        s = size * scale
+        s = 64
         img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
         w = max(2, int(1.6 * scale))
@@ -208,6 +209,18 @@ class ADBLogcatWindow:
         self._build_ui()
         self.start_logcat()
 
+    def _filter_packages(self, event):
+        if event.keysym in ("Up", "Down", "Left", "Right", "Return", "BackSpace"):
+            return
+        query = self.package_var.get().lower()
+        if query == "":
+            self.package_cb["values"] = self.packages
+        else:
+            filtered = [pkg for pkg in self.packages if query in pkg.lower()]
+            self.package_cb["values"] = filtered if filtered else ["No matches found"]
+        # Trigger dropdown opening automatically while typing
+        self.package_cb.event_generate('<Down>')
+
     def _load_packages(self):
         try:
             res = subprocess.run([self.adb_bin, "-s", self.device_id, "shell", "pm", "list", "packages", "-3"], capture_output=True, text=True)
@@ -226,13 +239,16 @@ class ADBLogcatWindow:
         level_cb = ttk.Combobox(toolbar, textvariable=self.level_var, values=["V", "D", "I", "W", "E", "F"], width=3, state="readonly")
         level_cb.pack(side=tk.LEFT, padx=(5, 15))
         level_cb.bind("<<ComboboxSelected>>", lambda e: self.restart_logcat())
-
+        
         tk.Label(toolbar, text="Package/PID:", bg=self.colors['GLASS_PANEL'], fg=self.colors['TEXT_PRIMARY']).pack(side=tk.LEFT)
         self.package_var = tk.StringVar(value="All Packages")
-        package_cb = ttk.Combobox(toolbar, textvariable=self.package_var, values=self.packages, width=25)
-        package_cb.pack(side=tk.LEFT, padx=(5, 15))
-        package_cb.bind("<Return>", lambda e: self.restart_logcat())
-        package_cb.bind("<<ComboboxSelected>>", lambda e: self.restart_logcat())
+        self.package_cb = ttk.Combobox(toolbar, textvariable=self.package_var, values=self.packages, width=25)
+        self.package_cb.pack(side=tk.LEFT, padx=(5, 15))
+        
+        # Bindings for fuzzy search
+        self.package_cb.bind("<KeyRelease>", self._filter_packages)
+        self.package_cb.bind("<Return>", lambda e: self.restart_logcat())
+        self.package_cb.bind("<<ComboboxSelected>>", lambda e: self.restart_logcat())
 
         tk.Label(toolbar, text="Search Regex:", bg=self.colors['GLASS_PANEL'], fg=self.colors['TEXT_PRIMARY']).pack(side=tk.LEFT)
         # Using standard tk.Entry to ensure reliable dark text rendering on macOS
@@ -443,6 +459,18 @@ class ADBFileManagerApp:
         self._monitor_running = True
         threading.Thread(target=self._device_monitor_loop, daemon=True).start()
 
+    def _handle_adb_bookmark(self, event):
+        sel = self.adb_bm_var.get()
+        if sel == "+ Add Current Folder...":
+            name = simpledialog.askstring("Add Bookmark", "Bookmark Name:", initialvalue=os.path.basename(self.adb_path))
+            if name:
+                self.adb_bookmarks[name] = self.adb_path
+                self.adb_bm_cb["values"] = list(self.adb_bookmarks.keys()) + ["+ Add Current Folder..."]
+            self.adb_bm_var.set("Bookmarks...")
+        elif sel in self.adb_bookmarks:
+            self.load_adb_directory(self.adb_bookmarks[sel])
+            self.adb_bm_var.set("Bookmarks...")
+            
     def _apply_macos_glass_theme(self):
         self.root.configure(bg=GLASS_BG)
         try:
@@ -567,6 +595,18 @@ class ADBFileManagerApp:
         # Bind the clean exit protocol to the window's close button
         self.root.protocol("WM_DELETE_WINDOW", self._on_app_close)
 
+    def _handle_mac_bookmark(self, event):
+        sel = self.mac_bm_var.get()
+        if sel == "+ Add Current Folder...":
+            name = simpledialog.askstring("Add Bookmark", "Bookmark Name:", initialvalue=os.path.basename(self.mac_path))
+            if name:
+                self.mac_bookmarks[name] = self.mac_path
+                self.mac_bm_cb["values"] = list(self.mac_bookmarks.keys()) + ["+ Add Current Folder..."]
+            self.mac_bm_var.set("Bookmarks...")
+        elif sel in self.mac_bookmarks:
+            self.load_mac_directory(self.mac_bookmarks[sel])
+            self.mac_bm_var.set("Bookmarks...")
+            
     def _build_mac_pane(self, parent):
         outer = tk.Frame(parent, bg=GLASS_PANEL, highlightbackground=GLASS_BORDER, highlightthickness=1)
         frame = ttk.Frame(outer, style="Panel.TFrame", padding=10)
@@ -578,8 +618,17 @@ class ADBFileManagerApp:
 
         bm_wrap = ttk.Frame(title_bar, style="Panel.TFrame")
         bm_wrap.pack(side=tk.RIGHT)
-        for label, path in [("Home", os.path.expanduser("~")), ("Desktop", os.path.expanduser("~/Desktop")), ("Downloads", os.path.expanduser("~/Downloads")), ("Documents", os.path.expanduser("~/Documents"))]:
-            ttk.Button(bm_wrap, text=label, style="Glass.TButton", command=lambda p=path: self.load_mac_directory(p)).pack(side=tk.LEFT, padx=(3, 0))
+        
+        self.mac_bookmarks = {
+            "Home": os.path.expanduser("~"),
+            "Desktop": os.path.expanduser("~/Desktop"),
+            "Downloads": os.path.expanduser("~/Downloads"),
+            "Documents": os.path.expanduser("~/Documents")
+        }
+        self.mac_bm_var = tk.StringVar(value="Bookmarks...")
+        self.mac_bm_cb = ttk.Combobox(bm_wrap, textvariable=self.mac_bm_var, values=list(self.mac_bookmarks.keys()) + ["+ Add Current Folder..."], state="readonly", width=16)
+        self.mac_bm_cb.pack(side=tk.LEFT, padx=(3, 0))
+        self.mac_bm_cb.bind("<<ComboboxSelected>>", self._handle_mac_bookmark)
 
         nav = ttk.Frame(frame, style="Panel.TFrame")
         nav.pack(fill=tk.X, pady=(0, 6))
@@ -655,8 +704,17 @@ class ADBFileManagerApp:
 
         bm_wrap = ttk.Frame(title_bar, style="Panel.TFrame")
         bm_wrap.pack(side=tk.RIGHT)
-        for label, path in [("/sdcard", "/sdcard"), ("Download", "/sdcard/Download"), ("DCIM", "/sdcard/DCIM"), ("Android/data", "/sdcard/Android/data")]:
-            ttk.Button(bm_wrap, text=label, style="Glass.TButton", command=lambda p=path: self.load_adb_directory(p)).pack(side=tk.LEFT, padx=(3, 0))
+        
+        self.adb_bookmarks = {
+            "/sdcard": "/sdcard",
+            "Download": "/sdcard/Download",
+            "DCIM": "/sdcard/DCIM",
+            "Android/data": "/sdcard/Android/data"
+        }
+        self.adb_bm_var = tk.StringVar(value="Bookmarks...")
+        self.adb_bm_cb = ttk.Combobox(bm_wrap, textvariable=self.adb_bm_var, values=list(self.adb_bookmarks.keys()) + ["+ Add Current Folder..."], state="readonly", width=16)
+        self.adb_bm_cb.pack(side=tk.LEFT, padx=(3, 0))
+        self.adb_bm_cb.bind("<<ComboboxSelected>>", self._handle_adb_bookmark)
 
         nav = ttk.Frame(frame, style="Panel.TFrame")
         nav.pack(fill=tk.X, pady=(0, 6))
@@ -1062,19 +1120,25 @@ class ADBFileManagerApp:
         def worker():
             cmd = [ADB_BIN, "-s", self.selected_device.get(), "exec-out", "screencap", "-p"]
             res = subprocess.run(cmd, capture_output=True)
-            ok = res.returncode == 0 and len(res.stdout) > 0
-            if ok:
-                with open(out_path, "wb") as f:
-                    f.write(res.stdout)
+            
+            # Detect FLAG_SECURE / DRM blocks (returns empty or throws error)
+            if len(res.stdout) == 0 or b"secure" in res.stderr.lower():
+                self.root.after(0, lambda: self._set_busy(False))
+                self.root.after(0, lambda: messagebox.showwarning("Screenshot Blocked", "Failed to capture screen.\nThe current app likely has FLAG_SECURE enabled (e.g., Banking, Netflix)."))
+                return
+
+            with open(out_path, "wb") as f:
+                f.write(res.stdout)
+                
+            # macOS: Execute AppleScript to inject image directly into System Clipboard
+            subprocess.run(["osascript", "-e", f'set the clipboard to (read (POSIX file "{out_path}") as JPEG picture)'])
+
             def done():
                 self._set_busy(False)
-                if ok:
-                    self.load_mac_directory(self.mac_path)
-                    self.mac_tree.selection_set(filename)
-                    self._on_item_selected("mac")
-                    self.status_var.set(f"Saved screenshot: {filename}")
-                else:
-                    self.status_var.set("Screenshot failed.")
+                self.load_mac_directory(self.mac_path)
+                self.mac_tree.selection_set(filename)
+                self._on_item_selected("mac")
+                self.status_var.set(f"Screenshot saved & copied to clipboard: {filename}")
             self.root.after(0, done)
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1516,13 +1580,22 @@ class ADBFileManagerApp:
         if not self.selected_device.get():
             messagebox.showwarning("No Device", "Connect an Android device first.")
             return
-        if not shutil.which("scrcpy"):
+            
+        # Resolve scrcpy path explicitly for macOS GUI apps
+        scrcpy_bin = shutil.which("scrcpy")
+        if not scrcpy_bin:
+            for path in ["/opt/homebrew/bin/scrcpy", "/usr/local/bin/scrcpy"]:
+                if os.path.isfile(path) and os.access(path, os.X_OK):
+                    scrcpy_bin = path
+                    break
+                    
+        if not scrcpy_bin:
             messagebox.showerror("Dependency Missing", "Scrcpy is not installed.\nRun: brew install scrcpy")
             return
             
         self.status_var.set("Launching Scrcpy mirroring...")
         subprocess.Popen(
-            ["scrcpy", "-s", self.selected_device.get(), "--max-fps", "60", "--window-title", f"Glass Mirror: {self.selected_device.get()}"],
+            [scrcpy_bin, "-s", self.selected_device.get(), "--max-fps", "60", "--window-title", f"Glass Mirror: {self.selected_device.get()}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
 
@@ -1539,7 +1612,7 @@ class ADBFileManagerApp:
             dest = os.path.join(self.mac_path, out_file)
             
             def pull_worker():
-                time.sleep(1)
+                time.sleep(1.5) # Give Android MP4 muxer time to finalize the file
                 self.run_adb(["pull", "/sdcard/recording_temp.mp4", dest])
                 self.run_adb(["shell", "rm", "/sdcard/recording_temp.mp4"])
                 self.root.after(0, lambda: self.load_mac_directory(self.mac_path))
@@ -1547,9 +1620,19 @@ class ADBFileManagerApp:
                 
             threading.Thread(target=pull_worker, daemon=True).start()
         else:
-            cmd = [ADB_BIN, "-s", self.selected_device.get(), "shell", "screenrecord", "--bit-rate", "8000000", "/sdcard/recording_temp.mp4"]
+            res = simpledialog.askstring("Resolution", "Resolution (e.g. 1920x1080) or leave blank:")
+            bitrate = simpledialog.askstring("Bitrate", "Bitrate in Mbps (e.g. 8 for high quality):", initialvalue="8")
+            
+            cmd = [ADB_BIN, "-s", self.selected_device.get(), "shell", "screenrecord"]
+            if res and "x" in res:
+                cmd.extend(["--size", res.strip()])
+            if bitrate and bitrate.isdigit():
+                cmd.extend(["--bit-rate", str(int(bitrate) * 1000000)])
+                
+            cmd.append("/sdcard/recording_temp.mp4")
+            
             self.recording_process = subprocess.Popen(cmd)
-            self.status_var.set("Recording screen... Click File > Screen Record to stop and save.")
+            self.status_var.set("🔴 Recording... Click Screen Record again to STOP and save.")
 
     def inject_clipboard_to_device(self):
         if not self.selected_device.get():
